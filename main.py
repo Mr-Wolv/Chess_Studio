@@ -857,7 +857,7 @@ class ChessController:
                     "AI is thinking about its move..."
                     if ai_turn
                     else (
-                        "Stockfish is checking the promotion choice..."
+                        "AI is checking the promotion choice..."
                         if pending_promotion is not None and self.analysis_enabled
                         else "Promotion suggestion is paused. Press A to enable hints."
                         if pending_promotion is not None
@@ -898,7 +898,7 @@ class ChessController:
                 and suggested_move
                 and suggested_move in board.legal_moves
             ):
-                next_text = f"Stockfish suggests {board.san(suggested_move)}"
+                next_text = f"AI suggests {board.san(suggested_move)}"
             elif pending_promotion is not None and not self.analysis_enabled:
                 next_text = "Promotion suggestion is paused. Press A to enable hints."
             elif pending_promotion is not None:

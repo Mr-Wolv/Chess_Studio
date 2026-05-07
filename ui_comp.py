@@ -859,10 +859,10 @@ class ChessView:
             chess.KNIGHT: "knight",
         }
         if not suggestion_enabled:
-            return "Stockfish promotion suggestion is paused. Press A to enable hints."
+            return "AI promotion suggestion is paused. Press A to enable hints."
         if suggestion in piece_names:
-            return f"Stockfish suggests promotion to {piece_names[suggestion]}."
-        return "Stockfish is checking the promotion choice."
+            return f"AI suggests promotion to {piece_names[suggestion]}."
+        return "AI is checking the promotion choice."
 
     def _draw_result_dialog(self, state: ViewState) -> None:
         overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
