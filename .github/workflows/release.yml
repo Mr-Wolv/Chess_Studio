@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release artifact
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Build app
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Clean -FetchEngine -BundleEngine
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item -LiteralPath dist\ChessStudio.exe -Destination release\ChessStudio.exe
+          Copy-Item -LiteralPath README.md -Destination release\README.md
+          Copy-Item -LiteralPath LICENSE -Destination release\LICENSE
+          Copy-Item -LiteralPath THIRD_PARTY_NOTICES.md -Destination release\THIRD_PARTY_NOTICES.md
+          Compress-Archive -Path release\* -DestinationPath ChessStudio-${{ inputs.version }}-Windows.zip -Force
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: Chess Studio ${{ inputs.version }}
+          files: ChessStudio-${{ inputs.version }}-Windows.zip
+          generate_release_notes: true

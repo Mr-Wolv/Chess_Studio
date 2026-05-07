@@ -3,6 +3,7 @@ import chess
 import chess.engine
 import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
 
@@ -47,7 +48,10 @@ class ChessEngine:
         self.path = str(self._resolve_engine_path(Ai_path))
 
         try:
-            self.engine = chess.engine.SimpleEngine.popen_uci(self.path)
+            self.engine = chess.engine.SimpleEngine.popen_uci(
+                self.path,
+                **self._engine_startup_options(),
+            )
 
             cpu_count = os.cpu_count() or 1
             self.engine.configure(
@@ -63,13 +67,34 @@ class ChessEngine:
             print(f"ERROR: Could not launch AI at {self.path}. \nDetail: {e}")
             self.engine = None
 
+    def is_available(self):
+        return self.engine is not None
+
+    def _mark_engine_unavailable(self):
+        self.engine = None
+
     def _resolve_engine_path(self, engine_path):
         path = Path(engine_path)
         if path.is_absolute():
             return path
         if getattr(sys, "frozen", False):
+            external_path = Path(sys.executable).resolve().parent / path
+            if external_path.exists():
+                return external_path
             return Path(sys._MEIPASS) / path  # type: ignore[attr-defined]
         return Path(os.path.abspath(path))
+
+    def _engine_startup_options(self):
+        if os.name != "nt":
+            return {}
+
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        return {
+            "creationflags": subprocess.CREATE_NO_WINDOW,
+            "startupinfo": startupinfo,
+        }
 
     def reset_engine(self, fen=None):
         with self._board_lock:
@@ -140,8 +165,12 @@ class ChessEngine:
         if not self.engine:
             return 0
 
-        with self._engine_lock:
-            info = self.engine.analyse(board, chess.engine.Limit(time=time_limit))
+        try:
+            with self._engine_lock:
+                info = self.engine.analyse(board, chess.engine.Limit(time=time_limit))
+        except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+            self._mark_engine_unavailable()
+            return 0
 
         return self._extract_white_score(info.get("score"))
 
@@ -154,8 +183,12 @@ class ChessEngine:
         if not self.engine or board.is_game_over():
             return None
 
-        with self._engine_lock:
-            result = self.engine.play(board, chess.engine.Limit(time=time_limit))
+        try:
+            with self._engine_lock:
+                result = self.engine.play(board, chess.engine.Limit(time=time_limit))
+        except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+            self._mark_engine_unavailable()
+            return None
 
         if result and result.move:
             self.active_suggestion = result.move
@@ -181,8 +214,12 @@ class ChessEngine:
         if board.is_game_over() or move_time is None or move_time <= 0:
             return {"evaluation": evaluation, "suggestion": None}
 
-        with self._engine_lock:
-            result = self.engine.play(board, chess.engine.Limit(time=move_time))
+        try:
+            with self._engine_lock:
+                result = self.engine.play(board, chess.engine.Limit(time=move_time))
+        except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+            self._mark_engine_unavailable()
+            return {"evaluation": evaluation, "suggestion": None}
 
         return {
             "evaluation": evaluation,
@@ -208,12 +245,16 @@ class ChessEngine:
         if not promotion_moves:
             return None
 
-        with self._engine_lock:
-            result = self.engine.play(
-                board,
-                chess.engine.Limit(time=move_time),
-                root_moves=promotion_moves,
-            )
+        try:
+            with self._engine_lock:
+                result = self.engine.play(
+                    board,
+                    chess.engine.Limit(time=move_time),
+                    root_moves=promotion_moves,
+                )
+        except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+            self._mark_engine_unavailable()
+            return None
         return result.move if result and result.move else None
 
     def execute_move(self, from_sq, to_sq, promotion=None):

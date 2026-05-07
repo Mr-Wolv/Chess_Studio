@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate source
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Verify required assets
+        shell: pwsh
+        run: |
+          $required = @(
+            "chess.ico",
+            "assets\wK.png", "assets\wQ.png", "assets\wR.png", "assets\wB.png", "assets\wN.png", "assets\wP.png",
+            "assets\bK.png", "assets\bQ.png", "assets\bR.png", "assets\bB.png", "assets\bN.png", "assets\bP.png"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Missing required asset: $path"
+            }
+          }
+
+      - name: Compile Python sources
+        shell: pwsh
+        run: |
+          $env:PYTHONPYCACHEPREFIX = Join-Path (Get-Location) ".pycache_ci"
+          python -m py_compile main.py ui_comp.py engine.py
+
+  build:
+    name: Build Windows executable
+    runs-on: windows-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Build app
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Clean -FetchEngine -BundleEngine
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChessStudio-Windows
+          path: dist/ChessStudio.exe
+          if-no-files-found: error

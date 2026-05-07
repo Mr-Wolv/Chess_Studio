@@ -13,6 +13,7 @@ from ui_comp import ChessView, ViewState
 
 class ChessController:
     AI_SIDE = chess.BLACK
+    AI_UNAVAILABLE_TEXT = "AI is not loaded, so engine features are unavailable."
 
     def __init__(self) -> None:
         self.engine = ChessEngine()
@@ -31,8 +32,8 @@ class ChessController:
         self.analysis_eval = 0.0
         self.analysis_text = (
             "Move hints are off. Press A to show AI suggestions."
-            if self.engine.engine is not None
-            else "AI unavailable for live analysis."
+            if self.engine.is_available()
+            else self.AI_UNAVAILABLE_TEXT
         )
         self.suggested_move: Optional[chess.Move] = None
         self.pending_ai_move: Optional[tuple[str, chess.Move]] = None
@@ -182,20 +183,25 @@ class ChessController:
 
         if key == pygame.K_a:
             self.analysis_enabled = (
-                not self.analysis_enabled and self.engine.engine is not None
+                not self.analysis_enabled and self.engine.is_available()
             )
             with self.state_lock:
                 if not self.analysis_enabled:
                     self.suggested_move = None
                     self.promotion_suggestion = None
-                self.analysis_text = (
-                    "Move hints paused. Evaluation still updates in the background."
-                    if not self.analysis_enabled
-                    else "Move hints resumed. AI is reviewing the current position..."
-                )
+                if not self.engine.is_available():
+                    self.analysis_text = self.AI_UNAVAILABLE_TEXT
+                else:
+                    self.analysis_text = (
+                        "Move hints paused. Evaluation still updates in the background."
+                        if not self.analysis_enabled
+                        else "Move hints resumed. AI is reviewing the current position..."
+                    )
                 self.analysis_dirty = True
             self._flash(
-                "Move hints paused."
+                "AI is not loaded."
+                if not self.engine.is_available()
+                else "Move hints paused."
                 if not self.analysis_enabled
                 else "Move hints resumed."
             )
@@ -363,7 +369,9 @@ class ChessController:
             self.analysis_eval = 0.0
             self._clear_engine_suggestions_locked()
             self.analysis_text = (
-                "AI is reviewing the opening position..."
+                self.AI_UNAVAILABLE_TEXT
+                if not self.engine.is_available()
+                else "AI is reviewing the opening position..."
                 if self.analysis_enabled
                 else "Move hints are off. Press A to show AI suggestions."
             )
@@ -647,7 +655,7 @@ class ChessController:
             self.analysis_text = self.match_result["message"]
 
     def _toggle_ai_mode(self) -> None:
-        if not self.play_vs_ai and self.engine.engine is None:
+        if not self.play_vs_ai and not self.engine.is_available():
             self._flash("AI is unavailable, so vs AI mode cannot start.")
             return
 
@@ -659,7 +667,9 @@ class ChessController:
             self.analysis_dirty = True
             self._clear_engine_suggestions_locked()
             self.analysis_text = (
-                "AI is ready to play Black."
+                self.AI_UNAVAILABLE_TEXT
+                if not self.engine.is_available()
+                else "AI is ready to play Black."
                 if self.play_vs_ai
                 else "Local 1v1 mode is active."
             )
@@ -770,6 +780,11 @@ class ChessController:
             analysis_text = self.analysis_text
             suggested_move = self.suggested_move
             promotion_suggestion = self.promotion_suggestion
+            if not self.engine.is_available():
+                evaluation = 0.0
+                analysis_text = self.AI_UNAVAILABLE_TEXT
+                suggested_move = None
+                promotion_suggestion = None
         active_dialog = self._get_active_dialog()
 
         if suggested_move and suggested_move not in board.legal_moves:
@@ -820,7 +835,12 @@ class ChessController:
         )
 
     def _analysis_loop(self) -> None:
-        if self.engine.engine is None:
+        if not self.engine.is_available():
+            with self.state_lock:
+                self.analysis_eval = 0.0
+                self.analysis_dirty = False
+                self._clear_engine_suggestions_locked()
+                self.analysis_text = self.AI_UNAVAILABLE_TEXT
             return
 
         last_fen: Optional[str] = None
@@ -832,6 +852,15 @@ class ChessController:
             pending_promotion = self.pending_promotion
             with self.state_lock:
                 dirty = self.analysis_dirty or ai_turn
+
+            if not self.engine.is_available():
+                with self.state_lock:
+                    self.analysis_eval = 0.0
+                    self.analysis_dirty = False
+                    self._clear_engine_suggestions_locked()
+                    self.analysis_text = self.AI_UNAVAILABLE_TEXT
+                time.sleep(0.25)
+                continue
 
             if match_over:
                 self._refresh_match_result()

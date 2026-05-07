@@ -1,6 +1,8 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 .pycache_verify/
+.pycache_ci/
+.engine_download/
 *.py[cod]
 *$py.class
 
@@ -10,6 +12,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+release/
 develop-eggs/
 dist/
 downloads/
@@ -26,6 +29,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.zip
+*.7z
+*.tar
+*.tar.gz
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -130,6 +137,14 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
+.secrets
+.secrets.*
+*.secret
+*.token
+*.key
+*.pem
 .venv
 env/
 venv/

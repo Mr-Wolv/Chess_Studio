@@ -86,6 +86,7 @@ class ChessView:
             window_size = self._preferred_window_size()
         self.screen = pygame.display.set_mode(window_size, pygame.RESIZABLE)
         pygame.display.set_caption("Chess Studio")
+        self._set_window_icon("chess.ico")
         self.clock = pygame.time.Clock()
         self.assets_dir = self._resolve_assets_dir(assets_dir)
         self.fonts: dict[str, pygame.font.Font] = {}
@@ -103,6 +104,21 @@ class ChessView:
         if getattr(sys, "frozen", False):
             return Path(sys._MEIPASS) / Path(assets_dir) # type: ignore
         return Path(assets_dir)
+
+    def _resolve_app_file(self, file_name: str | Path) -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys._MEIPASS) / Path(file_name)  # type: ignore[attr-defined]
+        return Path(file_name)
+
+    def _set_window_icon(self, icon_path: str | Path) -> None:
+        path = self._resolve_app_file(icon_path)
+        if not path.exists():
+            return
+
+        try:
+            pygame.display.set_icon(pygame.image.load(str(path)))
+        except pygame.error:
+            pass
 
     def _enable_high_dpi(self) -> None:
         if os.name != "nt":
