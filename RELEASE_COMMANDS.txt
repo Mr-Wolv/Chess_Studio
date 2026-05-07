@@ -1,0 +1,159 @@
+Chess Studio Release Commands
+=============================
+
+CI vs Release
+-------------
+
+CI and Release are separate GitHub Actions workflows.
+
+CI:
+- Runs automatically on push and pull request.
+- Can also be triggered manually.
+- Validates source files.
+- Builds a Windows executable artifact.
+- Does not create a GitHub Release.
+
+Release:
+- Must be triggered manually with a version tag, such as v1.0.0.
+- Downloads Stockfish 18.
+- Builds ChessStudio.exe with Stockfish bundled.
+- Packages ChessStudio.exe, README.md, LICENSE, and THIRD_PARTY_NOTICES.md.
+- Publishes a GitHub Release ZIP.
+
+You do not have to manually run CI before Release.
+The Release workflow builds the app on its own.
+
+Recommended habit:
+- Let CI pass first when you changed code.
+- Then trigger Release when you are confident the current main branch is ready.
+
+
+Prerequisites
+-------------
+
+Run this once if GitHub CLI is not logged in:
+
+    gh auth login
+
+Or let the helper script open login automatically:
+
+    .\scripts\trigger-cicd.ps1
+
+
+Trigger CI
+----------
+
+Default: commit changes, push, trigger CI, open the run, and watch it.
+
+    .\scripts\trigger-cicd.ps1
+
+Trigger CI without committing current changes:
+
+    .\scripts\trigger-cicd.ps1 -NoCommit
+
+Trigger CI without pushing:
+
+    .\scripts\trigger-cicd.ps1 -NoPush
+
+Trigger CI without opening the browser:
+
+    .\scripts\trigger-cicd.ps1 -NoOpen
+
+Trigger CI without watching the run in the terminal:
+
+    .\scripts\trigger-cicd.ps1 -NoWatch
+
+Trigger CI from a specific branch:
+
+    .\scripts\trigger-cicd.ps1 -Ref main
+
+Trigger CI with a custom commit message:
+
+    .\scripts\trigger-cicd.ps1 -CommitMessage "Prepare Chess Studio release"
+
+
+Trigger Release
+---------------
+
+Default release command:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0
+
+Release with a custom commit message:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0 -CommitMessage "Release v1.0.0"
+
+Release from a specific branch:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0 -Ref main
+
+Release without committing current changes:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0 -NoCommit
+
+Release without pushing:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0 -NoPush
+
+Release without opening the browser:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0 -NoOpen
+
+Release without watching the run:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0 -NoWatch
+
+
+Local Production Build Without GitHub
+-------------------------------------
+
+Build locally with Stockfish bundled if AI.exe already exists:
+
+    .\scripts\build.ps1 -Clean
+
+Fetch Stockfish 18 first, then bundle it:
+
+    .\scripts\build.ps1 -Clean -FetchEngine
+
+Force a bundled-engine build and fail if AI.exe is missing:
+
+    .\scripts\build.ps1 -Clean -BundleEngine
+
+Fetch Stockfish 18 and force a bundled-engine build:
+
+    .\scripts\build.ps1 -Clean -FetchEngine -BundleEngine
+
+Create an engine-less development build:
+
+    .\scripts\build.ps1 -Clean -NoBundleEngine
+
+
+Version Naming
+--------------
+
+Use tags like:
+
+    v1.0.0
+    v1.0.1
+    v1.1.0
+
+Do not reuse an existing release tag unless you intentionally want to update/delete and recreate that release.
+
+
+Recommended Release Flow
+------------------------
+
+1. Make sure the app works locally.
+
+2. Trigger CI:
+
+    .\scripts\trigger-cicd.ps1
+
+3. Wait for CI to pass.
+
+4. Trigger release:
+
+    .\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0
+
+5. Download the release ZIP from GitHub Releases and smoke-test ChessStudio.exe.
+

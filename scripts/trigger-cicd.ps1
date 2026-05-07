@@ -90,7 +90,7 @@ if (-not $repo) {
     throw "Could not resolve the GitHub repository. Make sure this folder has a GitHub remote."
 }
 
-$workflowFile = if ($Workflow -eq "release") { "release.yml" } else { "ci.yml" }
+$workflowName = if ($Workflow -eq "release") { "Release" } else { "CI" }
 
 if ($Workflow -eq "release" -and -not $Version) {
     $Version = Read-Host "Release version, for example v1.0.0"
@@ -129,17 +129,17 @@ if (-not $NoPush) {
     Write-Host "Skipping push because -NoPush was passed." -ForegroundColor Yellow
 }
 
-Write-Step "Triggering GitHub Actions workflow '$workflowFile'"
+Write-Step "Triggering GitHub Actions workflow '$workflowName'"
 if ($Workflow -eq "release") {
-    Invoke-Checked "gh" @("workflow", "run", $workflowFile, "--repo", $repo, "--ref", $Ref, "-f", "version=$Version")
+    Invoke-Checked "gh" @("workflow", "run", $workflowName, "--repo", $repo, "--ref", $Ref, "-f", "version=$Version")
     Write-Host "Triggered release workflow on '$Ref' for '$Version'."
 } else {
-    Invoke-Checked "gh" @("workflow", "run", $workflowFile, "--repo", $repo, "--ref", $Ref)
+    Invoke-Checked "gh" @("workflow", "run", $workflowName, "--repo", $repo, "--ref", $Ref)
     Write-Host "Triggered CI workflow on '$Ref'."
 }
 
 Start-Sleep -Seconds 3
-$runUrl = gh run list --repo $repo --workflow $workflowFile --branch $Ref --limit 1 --json url --jq ".[0].url"
+$runUrl = gh run list --repo $repo --workflow $workflowName --branch $Ref --limit 1 --json url --jq ".[0].url"
 
 if ($runUrl) {
     Write-Host "Run URL: $runUrl" -ForegroundColor Green
