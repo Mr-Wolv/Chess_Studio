@@ -1,71 +1,43 @@
 # Chess Studio
 
-Chess Studio is a polished Windows desktop chess application built with Python, Pygame, `python-chess`, and Stockfish 18 analysis. It provides a responsive local chess board, move history, FEN copying, draw-claim handling, promotion assistance, and a vs-AI mode designed to be bundled cleanly with PyInstaller.
+Chess Studio is a Windows desktop chess application built with Python, Pygame, `python-chess`, and Stockfish 18. It provides a local chess board, legal move handling, move history, FEN export, draw handling, promotion support, and an optional Stockfish-controlled opponent.
+
+The project uses an MVC-inspired structure:
+
+- **Model:** `engine.py` manages chess state, legal moves, move history, captures, draw logic, and Stockfish communication.
+- **View:** `ui_comp.py` manages the Pygame window, board rendering, panels, promotion menu, dialogs, icons, and layout.
+- **Controller:** `main.py` connects input handling, game flow, UI state, game modes, dialogs, and background engine analysis.
+
+This separation keeps rules, rendering, and interaction flow in distinct parts of the codebase.
 
 ## Features
 
-- Local 1v1 chess with legal move validation.
-- Vs-AI mode where the player controls White and Stockfish 18 controls Black.
-- Engine hints toggled with `A`; hints are off by default.
-- Stockfish promotion guidance restricted to the legal promotion choices.
-- Scrollable move-list panel.
+- Local 1v1 chess with legal move validation through `python-chess`.
+- Vs-AI mode where White is controlled by the player and Black is controlled by Stockfish 18.
+- AI hints are disabled by default and can be toggled with `A`.
+- Promotion dialogs can show Stockfish's suggested promotion when hints are enabled.
+- Engine availability is reflected in the Engine Pulse panel.
+- Move history can be scrolled in the side panel.
 - `Ctrl+C` copies the full move list.
 - `C` copies the current FEN.
-- Captured-piece display for both sides.
-- Claim dialogs for threefold repetition and the fifty-move rule.
-- Automatic game-over handling for checkmate, stalemate, insufficient material, fivefold repetition, and the seventy-five-move rule.
-- High-DPI aware Windows rendering.
-- PyInstaller-friendly runtime path handling for bundled assets and engine binaries.
+- Captured pieces are displayed for both sides.
+- Claim dialogs are shown for threefold repetition and the fifty-move rule.
+- Automatic game endings are handled for checkmate, stalemate, insufficient material, fivefold repetition, and the seventy-five-move rule.
+- Windows executable builds are supported through PyInstaller.
+- CI and release workflows are included for reproducible Windows packaging.
 
-## Project Structure
+## Quick Start
+
+For packaged releases, the release ZIP contains:
 
 ```text
-Chess_Game/
-|-- .github/
-|   |-- workflows/
-|       |-- ci.yml
-|       `-- release.yml
-|-- assets/              # Piece images
-|-- scripts/
-|   |-- build.ps1        # Local/CI PyInstaller build script
-|   `-- fetch-stockfish.ps1
-|-- AI.exe               # Stockfish 18 executable copied/renamed locally, ignored by Git
-|-- engine.py            # Board state, move history, UCI engine integration
-|-- main.py              # Application controller and event loop
-|-- ui_comp.py           # Pygame layout, rendering, and hit-testing
-|-- requirements.txt     # Runtime dependencies
-|-- LICENSE
-|-- THIRD_PARTY_NOTICES.md
-`-- README.md
+ChessStudio.exe
+README.md
+LICENSE
+THIRD_PARTY_NOTICES.md
 ```
 
-## Requirements
-
-- Windows
-- Python 3.12
-- `pygame==2.6.1`
-- `chess==1.11.2`
-- Stockfish 18 copied/renamed to `AI.exe` for source runs
-
-Install dependencies:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-## Run From Source
-
-```powershell
-python main.py
-```
-
-For source runs, `AI.exe` should be present in the project root. If it is missing, Chess Studio still opens as a local chess board, but engine hints and vs-AI mode are unavailable. Production builds fetch and bundle Stockfish 18 automatically.
-
-To download the official Stockfish 18 Windows x86-64 release and place it at `AI.exe`:
-
-```powershell
-.\scripts\fetch-stockfish.ps1
-```
+`ChessStudio.exe` starts the application. Production releases are expected to include Stockfish 18 as `AI.exe`, so engine features are available without additional setup.
 
 ## Controls
 
@@ -73,9 +45,9 @@ To download the official Stockfish 18 Windows x86-64 release and place it at `AI
 | --- | --- |
 | Left click / drag | Select and move pieces |
 | Mouse wheel over move list | Scroll move history |
-| `R` | Start a new game |
-| `U` | Undo the last move |
-| `F` | Flip board orientation |
+| `R` | New game |
+| `U` | Undo |
+| `F` | Flip board |
 | `A` | Toggle AI hints and promotion suggestions |
 | `M` | Toggle local 1v1 / vs-AI mode |
 | `C` | Copy current FEN |
@@ -83,95 +55,157 @@ To download the official Stockfish 18 Windows x86-64 release and place it at `AI
 | `Esc` | Cancel promotion, clear selection, or close a dialog |
 | `Enter` | Confirm the primary dialog action |
 
-## Engine Behavior
+## Run From Source
 
-Chess Studio expects Stockfish 18 at `AI.exe`. The expected upstream archive is:
+Requirements:
+
+- Windows
+- Python 3.12
+- PowerShell
+- `pygame==2.6.1`
+- `chess==1.11.2`
+
+Install dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Fetch the official Stockfish 18 Windows x86-64 release and copy it locally as `AI.exe`:
+
+```powershell
+.\scripts\fetch-stockfish.ps1
+```
+
+Run the application:
+
+```powershell
+python main.py
+```
+
+If `AI.exe` is not present, local 1v1 play remains available. Engine hints and vs-AI mode are disabled until Stockfish can be loaded.
+
+## Stockfish 18
+
+Chess Studio uses the official Stockfish 18 Windows x86-64 release:
 
 ```text
 https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-windows-x86-64.zip
 ```
 
-The helper script `scripts/fetch-stockfish.ps1` downloads that archive, extracts the Stockfish executable, and copies it to `AI.exe`.
+The engine binary is not committed to the repository. The local and packaged executable name is:
 
-Engine lookup order:
+```text
+AI.exe
+```
 
-1. If running from source, `AI.exe` is resolved from the project root.
-2. If running as a PyInstaller executable, Chess Studio first checks beside the executable.
-3. If bundled with `--add-binary`, Chess Studio checks PyInstaller's bundle extraction directory.
+Runtime engine lookup supports:
 
-Production CI and release builds fetch and bundle Stockfish 18 automatically. The external-engine lookup is kept as a development safety net for source runs or custom builds.
+1. `AI.exe` in the project root when running from source.
+2. `AI.exe` beside `ChessStudio.exe` for local packaged builds.
+3. `AI.exe` inside PyInstaller's bundled extraction directory.
 
-Engine hints are intentionally disabled on startup. Press `A` to enable best-move arrows and promotion suggestions. When a pawn promotion is pending, Chess Studio asks Stockfish to choose among only the legal promotion pieces for that pawn move.
+If the engine is missing or becomes unavailable, the Engine Pulse panel reports that AI is not loaded.
 
-## Draws And Game Endings
+## Architecture
 
-Chess Studio distinguishes claimable draw rights from automatic endings:
+The codebase is organized around a small MVC-style split.
 
-- Threefold repetition and the fifty-move rule open a claim dialog when available.
-- Continuing from a claim dialog suppresses that exact-position prompt, while future claimable positions can still prompt again.
-- Fivefold repetition and the seventy-five-move rule end the game automatically.
-- Checkmate, stalemate, and insufficient material are detected automatically.
+| Layer | File | Responsibility |
+| --- | --- | --- |
+| Model | `engine.py` | Board state, legal moves, SAN history, captures, draw checks, Stockfish evaluation, AI move selection |
+| View | `ui_comp.py` | Pygame rendering, responsive layout, panels, board hit-testing, promotion menu, dialogs, clipboard support |
+| Controller | `main.py` | Event loop, user actions, mode switching, promotion flow, draw dialogs, background analysis coordination |
 
-## Build Locally
+The model can be read as the source of chess state, the view as the rendering and hit-testing layer, and the controller as the coordinator between application events and state changes.
 
-Install build tooling and create a one-file Windows executable:
+## Project Layout
+
+```text
+Chess_Game/
+|-- .github/workflows/
+|   |-- ci.yml
+|   `-- release.yml
+|-- assets/                  # Chess piece images
+|-- scripts/
+|   |-- build.ps1            # Local and CI PyInstaller build
+|   |-- fetch-stockfish.ps1  # Downloads Stockfish 18 as AI.exe
+|   `-- trigger-cicd.ps1     # Convenience workflow trigger
+|-- chess.ico                # Window and executable icon
+|-- engine.py                # Model
+|-- main.py                  # Controller
+|-- ui_comp.py               # View
+|-- requirements.txt
+|-- RELEASE_COMMANDS.md
+|-- THIRD_PARTY_NOTICES.md
+|-- LICENSE
+`-- README.md
+```
+
+## Build
+
+Create a clean Windows executable:
 
 ```powershell
 .\scripts\build.ps1 -Clean
 ```
 
-The executable is written to:
-
-```text
-dist/ChessStudio.exe
-```
-
-By default, the build script bundles `AI.exe` when it is present in the project root.
-
-To fetch Stockfish automatically before building:
+Fetch Stockfish before building:
 
 ```powershell
 .\scripts\build.ps1 -Clean -FetchEngine
 ```
 
-To intentionally create an engine-less development build:
+The generated executable is written to:
+
+```text
+dist/ChessStudio.exe
+```
+
+The build includes UI assets, `chess.ico`, and `AI.exe` when the engine is present or fetched. For a development build without Stockfish:
 
 ```powershell
 .\scripts\build.ps1 -Clean -NoBundleEngine
 ```
 
-## CI/CD
+## CI And Release
 
-The repository includes GitHub Actions workflows:
+The repository includes two GitHub Actions workflows:
 
-- `.github/workflows/ci.yml`
-  - Installs Python 3.12 dependencies.
-  - Verifies all required piece assets are present.
-  - Compiles Python sources.
-  - Downloads the official Stockfish 18 Windows x86-64 release.
-  - Builds a Windows `ChessStudio.exe` artifact with Stockfish bundled as `AI.exe`.
+- **CI:** validates source, verifies required assets, compiles Python files, fetches Stockfish 18, and builds a Windows executable artifact.
+- **Release:** builds the executable, packages it with the README, license, and third-party notices, then publishes a versioned GitHub release ZIP.
 
-- `.github/workflows/release.yml`
-  - Manual `workflow_dispatch` release pipeline.
-  - Downloads the official Stockfish 18 Windows x86-64 release.
-  - Builds `ChessStudio.exe` with Stockfish bundled as `AI.exe`.
-  - Packages the executable with `README.md`, `LICENSE`, and `THIRD_PARTY_NOTICES.md`.
-  - Publishes a GitHub release ZIP for the supplied version tag.
+The convenience script can trigger the normal CI workflow:
 
-Because `AI.exe` is ignored by Git, CI/CD fetches Stockfish 18 from the official upstream release URL before production packaging. If that download is unavailable, the production build should fail rather than publish an engine-less release.
-
-## Packaging Notes
-
-- `assets/` must be included in PyInstaller builds.
-- `AI.exe` is required for production builds and for engine hints/vs-AI play.
-- `AI.exe` is ignored by Git because the Stockfish binary is large and distributed separately upstream.
-- If distributing a build with Stockfish bundled, include Stockfish's license and required attribution with the release.
-- `THIRD_PARTY_NOTICES.md` is included for release packaging and should be kept current.
-- The repository license is GPLv3. Confirm that bundled assets and binaries are compatible with your intended distribution.
-
-## Dependencies
-
-```text
-chess==1.11.2
-pygame==2.6.1
+```powershell
+.\scripts\trigger-cicd.ps1
 ```
+
+The same script can trigger the release workflow with a version:
+
+```powershell
+.\scripts\trigger-cicd.ps1 -Workflow release -Version v1.0.0
+```
+
+Additional release command examples are documented in `RELEASE_COMMANDS.md`.
+
+## Distribution
+
+Releases are structured as self-contained Windows packages. The release workflow downloads Stockfish from the official upstream archive, bundles it as `AI.exe`, builds `ChessStudio.exe`, and packages the executable with the required project and license documentation.
+
+Release package expectations:
+
+- `ChessStudio.exe` opens directly into the Pygame window without an extra console.
+- `chess.ico` is used for the executable and window icon.
+- Stockfish 18 is bundled as `AI.exe`.
+- Engine features are available when Stockfish loads successfully.
+- The UI reports AI unavailability when Stockfish cannot be loaded.
+- `README.md`, `LICENSE`, and `THIRD_PARTY_NOTICES.md` are included in the release ZIP.
+
+`AI.exe` is ignored by Git. CI/CD handles the production engine download so the repository does not store the upstream binary.
+
+## License
+
+This repository is licensed under GPLv3. See `LICENSE` for the full license text.
+
+Stockfish and other third-party components remain under their own licenses. See `THIRD_PARTY_NOTICES.md` for attribution and distribution notes.
