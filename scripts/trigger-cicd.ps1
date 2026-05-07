@@ -25,7 +25,7 @@ function Write-Step {
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
-function Refresh-Path {
+function Update-Path {
     $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
@@ -61,7 +61,7 @@ function Test-GitHubAuth {
     return $process.ExitCode -eq 0
 }
 
-Refresh-Path
+Update-Path
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw "Git is not installed or not on PATH."
