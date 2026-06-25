@@ -1,0 +1,57 @@
+[project]
+name = "chess-studio"
+version = "1.0.0"
+description = "A professional desktop chess application with Stockfish AI integration"
+authors = [
+    { name = "Chess Studio Contributors" },
+]
+license = { text = "GPL-3.0-only" }
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "chess>=1.11",
+    "pygame>=2.6",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "RUF", # Ruff-specific
+]
+ignore = [
+    "E501",  # Allow long lines
+    "N999",  # Allow non-PEP8 file names if needed
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_unimported = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

@@ -1,14 +1,64 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import array
+import math
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import chess
 import pygame
+
 from engine import MoveRecord
+
+# ── Sound Manager ─────────────────────────────────────────────────
+
+
+class SoundManager:
+    """Generates programmatic sound effects for game events using pygame mixer."""
+
+    SAMPLE_RATE = 22050
+    VOLUME = 0.25
+
+    def __init__(self) -> None:
+        self._enabled = False
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=self.SAMPLE_RATE, size=-16, channels=1)
+            self._enabled = True
+        except pygame.error:
+            pass
+
+        self.sounds: dict[str, pygame.mixer.Sound] = {}
+        if self._enabled:
+            self.sounds["move"] = self._tone(440.0, 0.08)
+            self.sounds["capture"] = self._tone(330.0, 0.14)
+            self.sounds["check"] = self._tone(660.0, 0.16)
+            self.sounds["game_over"] = self._tone(220.0, 0.35)
+            self.sounds["button"] = self._tone(550.0, 0.05)
+            self.sounds["undo"] = self._tone(380.0, 0.10)
+            self.sounds["flag_fall"] = self._tone(180.0, 0.50)
+
+    def _tone(self, freq: float, duration: float) -> pygame.mixer.Sound:
+        """Generate a pure sine-wave tone at the given frequency and duration."""
+        num_samples = int(self.SAMPLE_RATE * duration)
+        samples = array.array(
+            "h",
+            [
+                int(32767 * self.VOLUME * math.sin(2.0 * math.pi * freq * t / self.SAMPLE_RATE))
+                for t in range(num_samples)
+            ],
+        )
+        return pygame.mixer.Sound(buffer=samples)
+
+    def play(self, name: str) -> None:
+        """Play a named sound effect."""
+        if self._enabled and name in self.sounds:
+            self.sounds[name].play()
+
+    def set_enabled(self, enabled: bool) -> None:
+        self._enabled = enabled
 
 
 @dataclass(frozen=True)
@@ -30,22 +80,23 @@ class ViewState:
     board: chess.Board
     move_history: list[MoveRecord]
     move_scroll_offset: int
-    selected_square: Optional[int]
+    selected_square: int | None
     legal_targets: set[int]
-    last_move: Optional[chess.Move]
-    suggested_move: Optional[chess.Move]
+    last_move: chess.Move | None
+    suggested_move: chess.Move | None
     evaluation: float
     status_text: str
     analysis_text: str
     orientation_white_bottom: bool
-    dragging_square: Optional[int]
-    drag_position: Optional[tuple[int, int]]
+    dragging_square: int | None
+    drag_position: tuple[int, int] | None
     pending_promotion: bool
-    promotion_suggestion: Optional[int]
+    promotion_suggestion: int | None
     promotion_suggestion_enabled: bool
     fen: str
     mode_text: str
     button_labels: dict[str, str]
+    show_shortcuts: bool
     result_visible: bool
     result_title: str
     result_message: str
@@ -54,6 +105,12 @@ class ViewState:
     result_primary_label: str
     result_secondary_key: str
     result_secondary_label: str
+    sound_enabled: bool
+    material_balance: str
+    king_in_check: bool
+    checked_king_square: int | None
+    ai_elo_label: str
+    clock_text: str
     white_captured_keys: list[str]
     black_captured_keys: list[str]
 
@@ -78,7 +135,7 @@ class ChessView:
     def __init__(
         self,
         assets_dir: str | Path = "assets",
-        window_size: Optional[tuple[int, int]] = None,
+        window_size: tuple[int, int] | None = None,
     ):
         self._enable_high_dpi()
         pygame.init()
@@ -93,16 +150,24 @@ class ChessView:
         self.layout: dict[str, pygame.Rect] = {}
         self.buttons: list[UIButton] = []
         self.result_buttons: list[UIButton] = []
-        self.promotion_menu: Optional[PromotionMenu] = None
+        self.promotion_menu: PromotionMenu | None = None
         self.base_images: dict[str, pygame.Surface] = {}
         self.scaled_images: dict[tuple[str, int], pygame.Surface] = {}
         self._load_piece_images()
         self._init_clipboard()
+
+        # Gradient caching
+        self._cached_background: pygame.Surface | None = None
+        self._last_bg_size: tuple[int, int] | None = None
+
+        # FEN text caching
+        self._cached_fen_text: tuple[str, list[str]] = ("", [])
+
         self.rebuild_layout(*window_size)
 
     def _resolve_assets_dir(self, assets_dir: str | Path) -> Path:
         if getattr(sys, "frozen", False):
-            return Path(sys._MEIPASS) / Path(assets_dir) # type: ignore
+            return Path(sys._MEIPASS) / Path(assets_dir)  # type: ignore
         return Path(assets_dir)
 
     def _resolve_app_file(self, file_name: str | Path) -> Path:
@@ -115,10 +180,10 @@ class ChessView:
         if not path.exists():
             return
 
-        try:
+        from contextlib import suppress
+
+        with suppress(pygame.error):
             pygame.display.set_icon(pygame.image.load(str(path)))
-        except pygame.error:
-            pass
 
     def _enable_high_dpi(self) -> None:
         if os.name != "nt":
@@ -141,10 +206,10 @@ class ChessView:
         return width, height
 
     def _init_clipboard(self) -> None:
-        try:
+        from contextlib import suppress
+
+        with suppress(pygame.error):
             pygame.scrap.init()
-        except pygame.error:
-            pass
 
     def _load_piece_images(self) -> None:
         for color in ("w", "b"):
@@ -154,6 +219,10 @@ class ChessView:
                 self.base_images[key] = pygame.image.load(str(path)).convert_alpha()
 
     def rebuild_layout(self, width: int, height: int) -> None:
+        # Invalidate cached background since window size changed
+        self._cached_background = None
+        self._last_bg_size = None
+
         outer_pad = 28
         column_gap = 26
         panel_gap = 18
@@ -174,7 +243,7 @@ class ChessView:
         sidebar_width = max(sidebar_min_width, width - sidebar_x - outer_pad)
 
         header_height = 88
-        controls_height = 148
+        controls_height = 198
         eval_height = 106
         status_height = 148
         fen_height = 128
@@ -214,9 +283,11 @@ class ChessView:
         button_gap = 10
         left_x = control_area.x
         right_x = control_area.x + button_width + button_gap
+        gap2 = button_gap
         top_y = control_area.y
-        middle_y = top_y + button_height + 10
-        bottom_y = middle_y + button_height + 10
+        row2_y = top_y + button_height + gap2
+        row3_y = row2_y + button_height + gap2
+        row4_y = row3_y + button_height + gap2
         self.buttons = [
             UIButton(
                 "new_game",
@@ -233,20 +304,26 @@ class ChessView:
             UIButton(
                 "flip_board",
                 "Flip Board",
-                pygame.Rect(left_x, middle_y, button_width, button_height),
+                pygame.Rect(left_x, row2_y, button_width, button_height),
                 self.ACCENT,
             ),
             UIButton(
                 "copy_fen",
                 "Copy FEN",
-                pygame.Rect(right_x, middle_y, button_width, button_height),
+                pygame.Rect(right_x, row2_y, button_width, button_height),
                 self.ACCENT_SOFT,
             ),
             UIButton(
                 "mode_toggle",
                 "Mode: Local 1v1",
-                pygame.Rect(left_x, bottom_y, control_area.width, button_height),
+                pygame.Rect(left_x, row3_y, control_area.width, button_height),
                 self.SUCCESS,
+            ),
+            UIButton(
+                "clock_toggle",
+                "Clock: Paused",
+                pygame.Rect(left_x, row4_y, control_area.width, button_height),
+                self.ACCENT,
             ),
         ]
 
@@ -270,7 +347,7 @@ class ChessView:
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
         self.rebuild_layout(width, height)
 
-    def button_at(self, position: tuple[int, int]) -> Optional[str]:
+    def button_at(self, position: tuple[int, int]) -> str | None:
         for button in self.buttons:
             if button.rect.collidepoint(position):
                 return button.key
@@ -290,9 +367,7 @@ class ChessView:
         visible_rows = self.get_move_list_visible_rows()
         return max(0, total_rows - visible_rows)
 
-    def screen_to_square(
-        self, position: tuple[int, int], white_bottom: bool
-    ) -> Optional[int]:
+    def screen_to_square(self, position: tuple[int, int], white_bottom: bool) -> int | None:
         board_rect = self.layout["board"]
         if not board_rect.collidepoint(position):
             return None
@@ -322,7 +397,7 @@ class ChessView:
             int(cell),
         )
 
-    def promotion_choice_at(self, position: tuple[int, int]) -> Optional[int]:
+    def promotion_choice_at(self, position: tuple[int, int]) -> int | None:
         if not self.promotion_menu:
             return None
         for piece_type, rect in self.promotion_menu.options:
@@ -337,9 +412,17 @@ class ChessView:
         except pygame.error:
             return False
 
-    def _fit_single_line(
-        self, text: str, font: pygame.font.Font, max_width: int
-    ) -> str:
+    def read_from_clipboard(self) -> str | None:
+        """Read text from the system clipboard, or return None if unavailable."""
+        try:
+            data = pygame.scrap.get(pygame.SCRAP_TEXT)
+            if data:
+                return data.decode("utf-8")
+        except pygame.error:
+            pass
+        return None
+
+    def _fit_single_line(self, text: str, font: pygame.font.Font, max_width: int) -> str:
         if font.size(text)[0] <= max_width:
             return text
 
@@ -356,7 +439,7 @@ class ChessView:
         color: tuple[int, int, int],
         rect: pygame.Rect,
         line_gap: int = 6,
-        max_lines: Optional[int] = None,
+        max_lines: int | None = None,
     ) -> int:
         words = text.split()
         if not words:
@@ -398,7 +481,7 @@ class ChessView:
             y += line_height + line_gap
         return y - rect.y
 
-    def result_dialog_action_at(self, position: tuple[int, int]) -> Optional[str]:
+    def result_dialog_action_at(self, position: tuple[int, int]) -> str | None:
         for button in self.result_buttons:
             if button.rect.collidepoint(position):
                 return button.key
@@ -415,6 +498,7 @@ class ChessView:
         self._draw_panel(self.layout["fen"])
         self._draw_morgue(state)
         self._draw_header()
+        self._draw_clock(state)
         self._draw_buttons(state)
         self._draw_eval_panel(state)
         self._draw_status_panel(state)
@@ -430,25 +514,35 @@ class ChessView:
         elif state.result_visible:
             self._draw_result_dialog(state)
             self.promotion_menu = None
+        elif state.show_shortcuts:
+            self.promotion_menu = None
+            self.result_buttons = []
+            self._draw_shortcut_overlay()
         else:
             self.promotion_menu = None
             self.result_buttons = []
         pygame.display.flip()
 
     def _draw_background(self) -> None:
-        width, height = self.screen.get_size()
-        for y in range(height):
-            blend = y / max(height - 1, 1)
-            color = tuple(
-                int(self.BG_TOP[index] * (1 - blend) + self.BG_BOTTOM[index] * blend)
-                for index in range(3)
-            )
-            pygame.draw.line(self.screen, color, (0, y), (width, y))
+        size = self.screen.get_size()
+        # Rebuild cached gradient only when the window size changes
+        if self._cached_background is None or self._last_bg_size != size:
+            width, height = size
+            bg = pygame.Surface(size)
+            for y in range(height):
+                blend = y / max(height - 1, 1)
+                color = tuple(
+                    int(self.BG_TOP[index] * (1 - blend) + self.BG_BOTTOM[index] * blend)
+                    for index in range(3)
+                )
+                pygame.draw.line(bg, color, (0, y), (width, y))
+            self._cached_background = bg
+            self._last_bg_size = size
+
+        self.screen.blit(self._cached_background, (0, 0))
 
         board_rect = self.layout["board"]
-        halo = pygame.Surface(
-            (board_rect.width + 80, board_rect.height + 80), pygame.SRCALPHA
-        )
+        halo = pygame.Surface((board_rect.width + 80, board_rect.height + 80), pygame.SRCALPHA)
         pygame.draw.ellipse(halo, (57, 105, 178, 44), halo.get_rect())
         self.screen.blit(halo, (board_rect.x - 40, board_rect.y - 40))
 
@@ -462,30 +556,30 @@ class ChessView:
         title_y = rect.y + (rect.height - title.get_height()) // 2 - 2
         self.screen.blit(title, (rect.x + 22, title_y))
 
+    def _draw_clock(self, state: ViewState) -> None:
+        """Draw the chess clock below the header if clock text is present."""
+        if not state.clock_text:
+            return
+        rect = self.layout["header"]
+        clock_surface = self.fonts["body"].render(state.clock_text, True, self.ACCENT_SOFT)
+        self.screen.blit(clock_surface, (rect.right - clock_surface.get_width() - 22, rect.y + 8))
+
     def _draw_morgue(self, state: ViewState) -> None:
         rect = self.layout["morgue"]
-        top_rect = pygame.Rect(
-            rect.x + 12, rect.y + 12, rect.width - 24, rect.height // 2 - 18
-        )
+        top_rect = pygame.Rect(rect.x + 12, rect.y + 12, rect.width - 24, rect.height // 2 - 18)
         bottom_rect = pygame.Rect(
             rect.x + 12, rect.centery + 6, rect.width - 24, rect.height // 2 - 18
         )
         self._draw_morgue_section(top_rect, "Black Captured", state.black_captured_keys)
-        self._draw_morgue_section(
-            bottom_rect, "White Captured", state.white_captured_keys
-        )
+        self._draw_morgue_section(bottom_rect, "White Captured", state.white_captured_keys)
 
-    def _draw_morgue_section(
-        self, rect: pygame.Rect, title: str, captured_keys: list[str]
-    ) -> None:
+    def _draw_morgue_section(self, rect: pygame.Rect, title: str, captured_keys: list[str]) -> None:
         pygame.draw.rect(self.screen, self.PANEL_ALT, rect, border_radius=18)
         pygame.draw.rect(self.screen, self.PANEL_BORDER, rect, 1, border_radius=18)
         heading = self.fonts["small"].render(title, True, self.TEXT_PRIMARY)
         self.screen.blit(heading, (rect.x + 12, rect.y + 10))
 
-        body_rect = pygame.Rect(
-            rect.x + 10, rect.y + 40, rect.width - 20, rect.height - 50
-        )
+        body_rect = pygame.Rect(rect.x + 10, rect.y + 40, rect.width - 20, rect.height - 50)
         if not captured_keys:
             placeholder = self.fonts["small"].render("None", True, self.TEXT_MUTED)
             self.screen.blit(placeholder, placeholder.get_rect(center=body_rect.center))
@@ -517,14 +611,10 @@ class ChessView:
             shadow = button.rect.move(0, 3)
             pygame.draw.rect(self.screen, (0, 0, 0, 50), shadow, border_radius=16)
             pygame.draw.rect(self.screen, self.PANEL_ALT, button.rect, border_radius=16)
-            pygame.draw.rect(
-                self.screen, button.accent, button.rect, 2, border_radius=16
-            )
+            pygame.draw.rect(self.screen, button.accent, button.rect, 2, border_radius=16)
             label_text = state.button_labels.get(button.key, button.label)
             label = self.fonts["button"].render(
-                self._fit_single_line(
-                    label_text, self.fonts["button"], button.rect.width - 26
-                ),
+                self._fit_single_line(label_text, self.fonts["button"], button.rect.width - 26),
                 True,
                 self.TEXT_PRIMARY,
             )
@@ -551,6 +641,16 @@ class ChessView:
         score_text = f"{state.evaluation:+.2f}"
         score = self.fonts["body"].render(score_text, True, self.TEXT_PRIMARY)
         self.screen.blit(score, (bar_rect.right - score.get_width(), rect.y + 10))
+
+        # Material balance
+        if state.material_balance:
+            mat_surface = self.fonts["tiny"].render(state.material_balance, True, self.TEXT_MUTED)
+            self.screen.blit(mat_surface, (bar_rect.x, rect.y + 12))
+
+        # AI ELO label
+        elo_surface = self.fonts["tiny"].render(state.ai_elo_label, True, self.TEXT_MUTED)
+        self.screen.blit(elo_surface, (bar_rect.right - elo_surface.get_width(), rect.y + 12))
+
         self._draw_wrapped_text(
             state.analysis_text,
             self.fonts["small"],
@@ -575,9 +675,7 @@ class ChessView:
             max_lines=2,
         )
 
-        shortcut_label = self.fonts["small"].render(
-            "Keyboard Shortcuts", True, self.TEXT_PRIMARY
-        )
+        shortcut_label = self.fonts["small"].render("Keyboard Shortcuts", True, self.TEXT_PRIMARY)
         label_y = status_rect.bottom + 6
         if label_y + shortcut_label.get_height() + 2 < rect.bottom - 4:
             self.screen.blit(shortcut_label, (rect.x + 18, label_y))
@@ -585,14 +683,12 @@ class ChessView:
             shortcut_y = label_y + shortcut_label.get_height() + 4
             shortcut_rect = pygame.Rect(rect.x + 18, shortcut_y, rect.width - 36, 26)
             if shortcut_y + shortcut_rect.height <= rect.bottom - 4:
-                pygame.draw.rect(
-                    self.screen, self.PANEL_ALT, shortcut_rect, border_radius=16
-                )
-                pygame.draw.rect(
-                    self.screen, self.PANEL_BORDER, shortcut_rect, 1, border_radius=16
-                )
+                pygame.draw.rect(self.screen, self.PANEL_ALT, shortcut_rect, border_radius=16)
+                pygame.draw.rect(self.screen, self.PANEL_BORDER, shortcut_rect, 1, border_radius=16)
 
-                shortcut_text = "R=New, U=Undo, F=Flip, A=Hint, M=Mode, C=Copy FEN, Ctrl+C=Copy Moves"
+                shortcut_text = (
+                    "R=New, U=Undo, F=Flip, A=Hint, M=Mode, S=Sound, C=FEN, Ctrl+C=Moves"
+                )
                 shortcut_surface = self.fonts["small"].render(
                     self._fit_single_line(
                         shortcut_text, self.fonts["small"], shortcut_rect.width - 20
@@ -621,9 +717,7 @@ class ChessView:
         heading = self.fonts["heading"].render("Move List", True, self.TEXT_PRIMARY)
         self.screen.blit(heading, (rect.x + 18, rect.y + 12))
 
-        list_rect = pygame.Rect(
-            rect.x + 10, rect.y + 44, rect.width - 20, rect.height - 56
-        )
+        list_rect = pygame.Rect(rect.x + 10, rect.y + 44, rect.width - 20, rect.height - 56)
         previous_clip = self.screen.get_clip()
         self.screen.set_clip(list_rect)
 
@@ -641,11 +735,7 @@ class ChessView:
         for index in range(0, len(move_history), 2):
             move_number = f"{index // 2 + 1}."
             white_move = move_history[index].san
-            black_move = (
-                move_history[index + 1].san
-                if index + 1 < len(move_history)
-                else ""
-            )
+            black_move = move_history[index + 1].san if index + 1 < len(move_history) else ""
             rows.append((move_number, white_move, black_move))
 
         max_scroll = max(0, len(rows) - visible_rows)
@@ -675,14 +765,10 @@ class ChessView:
         if max_scroll > 0:
             track_rect = pygame.Rect(rect.right - 12, rect.y + 54, 4, rect.height - 72)
             pygame.draw.rect(self.screen, self.PANEL_ALT, track_rect, border_radius=4)
-            thumb_height = max(
-                28, int(track_rect.height * (visible_rows / max(len(rows), 1)))
-            )
+            thumb_height = max(28, int(track_rect.height * (visible_rows / max(len(rows), 1))))
             thumb_range = max(1, track_rect.height - thumb_height)
             thumb_y = track_rect.y + int((start_index / max_scroll) * thumb_range)
-            thumb_rect = pygame.Rect(
-                track_rect.x, thumb_y, track_rect.width, thumb_height
-            )
+            thumb_rect = pygame.Rect(track_rect.x, thumb_y, track_rect.width, thumb_height)
             pygame.draw.rect(self.screen, self.ACCENT_SOFT, thumb_rect, border_radius=4)
 
     def _draw_fen_panel(self, fen: str) -> None:
@@ -690,12 +776,15 @@ class ChessView:
         heading = self.fonts["heading"].render("FEN Snapshot", True, self.TEXT_PRIMARY)
         self.screen.blit(heading, (rect.x + 18, rect.y + 12))
 
-        body_rect = pygame.Rect(
-            rect.x + 18, rect.y + 48, rect.width - 36, rect.height - 62
-        )
+        body_rect = pygame.Rect(rect.x + 18, rect.y + 48, rect.width - 36, rect.height - 62)
         pygame.draw.rect(self.screen, self.PANEL_ALT, body_rect, border_radius=16)
 
-        lines = self._wrap_text(fen, self.fonts["tiny"], body_rect.width - 20)
+        # Cache wrapped FEN text lines for performance
+        if self._cached_fen_text[0] != fen:
+            wrapped = self._wrap_text(fen, self.fonts["tiny"], body_rect.width - 20)
+            self._cached_fen_text = (fen, wrapped)
+
+        lines = self._cached_fen_text[1]
         y = body_rect.y + 12
         for line in lines[:4]:
             surface = self.fonts["tiny"].render(line, True, self.TEXT_MUTED)
@@ -706,9 +795,7 @@ class ChessView:
         board_rect = self.layout["board"]
         frame_rect = board_rect.inflate(12, 12)
         pygame.draw.rect(self.screen, (7, 10, 16), frame_rect, border_radius=24)
-        pygame.draw.rect(
-            self.screen, self.PANEL_BORDER, frame_rect, 2, border_radius=24
-        )
+        pygame.draw.rect(self.screen, self.PANEL_BORDER, frame_rect, 2, border_radius=24)
 
         for square in chess.SQUARES:
             square_rect = self.square_to_rect(square, state.orientation_white_bottom)
@@ -725,9 +812,7 @@ class ChessView:
                 self.screen.blit(overlay, square_rect.topleft)
 
             if state.selected_square == square:
-                pygame.draw.rect(
-                    self.screen, self.ACCENT, square_rect, 4, border_radius=8
-                )
+                pygame.draw.rect(self.screen, self.ACCENT, square_rect, 4, border_radius=8)
 
             if square in state.legal_targets:
                 overlay = pygame.Surface(square_rect.size, pygame.SRCALPHA)
@@ -748,28 +833,30 @@ class ChessView:
                     )
                 self.screen.blit(overlay, square_rect.topleft)
 
+        # King-in-check highlight
+        if state.king_in_check and state.checked_king_square is not None:
+            king_rect = self.square_to_rect(state.checked_king_square, state.orientation_white_bottom)
+            overlay = pygame.Surface(king_rect.size, pygame.SRCALPHA)
+            overlay.fill((255, 60, 60, 140))
+            self.screen.blit(overlay, king_rect.topleft)
+            pygame.draw.rect(self.screen, (255, 40, 40), king_rect, 4, border_radius=8)
+
         self._draw_coordinates(state.orientation_white_bottom)
 
         if state.suggested_move and state.suggested_move in state.board.legal_moves:
-            self._draw_suggestion_arrow(
-                state.suggested_move, state.orientation_white_bottom
-            )
+            self._draw_suggestion_arrow(state.suggested_move, state.orientation_white_bottom)
 
         for square in chess.SQUARES:
             if square == state.dragging_square:
                 continue
             piece = state.board.piece_at(square)
             if piece:
-                self._draw_piece(
-                    piece, self.square_to_rect(square, state.orientation_white_bottom)
-                )
+                self._draw_piece(piece, self.square_to_rect(square, state.orientation_white_bottom))
 
         if state.dragging_square is not None and state.drag_position is not None:
             piece = state.board.piece_at(state.dragging_square)
             if piece:
-                rect = self.square_to_rect(
-                    state.dragging_square, state.orientation_white_bottom
-                )
+                rect = self.square_to_rect(state.dragging_square, state.orientation_white_bottom)
                 rect.center = state.drag_position
                 self._draw_piece(piece, rect)
 
@@ -784,9 +871,7 @@ class ChessView:
         if cache_key not in self.scaled_images:
             image = self.base_images[key]
             target = int(square_size * 0.82)
-            self.scaled_images[cache_key] = pygame.transform.smoothscale(
-                image, (target, target)
-            )
+            self.scaled_images[cache_key] = pygame.transform.smoothscale(image, (target, target))
         return self.scaled_images[cache_key]
 
     def _draw_coordinates(self, white_bottom: bool) -> None:
@@ -824,9 +909,7 @@ class ChessView:
         pygame.draw.rect(self.screen, self.PANEL, panel_rect, border_radius=24)
         pygame.draw.rect(self.screen, self.ACCENT_SOFT, panel_rect, 2, border_radius=24)
 
-        title = self.fonts["heading"].render(
-            "Choose Promotion", True, self.TEXT_PRIMARY
-        )
+        title = self.fonts["heading"].render("Choose Promotion", True, self.TEXT_PRIMARY)
         self.screen.blit(title, (panel_rect.x + 26, panel_rect.y + 16))
         self._draw_wrapped_text(
             self._promotion_hint_text(
@@ -834,9 +917,7 @@ class ChessView:
             ),
             self.fonts["small"],
             self.TEXT_MUTED,
-            pygame.Rect(
-                panel_rect.x + 26, panel_rect.y + 48, panel_rect.width - 52, 58
-            ),
+            pygame.Rect(panel_rect.x + 26, panel_rect.y + 48, panel_rect.width - 52, 58),
             line_gap=2,
             max_lines=2,
         )
@@ -844,15 +925,9 @@ class ChessView:
         piece_types = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
         option_rects: list[tuple[int, pygame.Rect]] = []
         for index, piece_type in enumerate(piece_types):
-            rect = pygame.Rect(
-                panel_rect.x + 22 + index * 92, panel_rect.y + 124, 70, 56
-            )
+            rect = pygame.Rect(panel_rect.x + 22 + index * 92, panel_rect.y + 124, 70, 56)
             pygame.draw.rect(self.screen, self.PANEL_ALT, rect, border_radius=16)
-            border_color = (
-                self.SUCCESS
-                if piece_type == state.promotion_suggestion
-                else self.ACCENT
-            )
+            border_color = self.SUCCESS if piece_type == state.promotion_suggestion else self.ACCENT
             pygame.draw.rect(self.screen, border_color, rect, 2, border_radius=16)
             piece = chess.Piece(piece_type, state.board.turn)
             self._draw_piece(piece, rect.inflate(-6, -6))
@@ -865,9 +940,7 @@ class ChessView:
 
         self.promotion_menu = PromotionMenu(panel_rect, option_rects)
 
-    def _promotion_hint_text(
-        self, suggestion: Optional[int], suggestion_enabled: bool
-    ) -> str:
+    def _promotion_hint_text(self, suggestion: int | None, suggestion_enabled: bool) -> str:
         piece_names = {
             chess.QUEEN: "queen",
             chess.ROOK: "rook",
@@ -897,9 +970,7 @@ class ChessView:
             state.result_message,
             self.fonts["body"],
             self.TEXT_PRIMARY,
-            pygame.Rect(
-                panel_rect.x + 28, panel_rect.y + 94, panel_rect.width - 56, 76
-            ),
+            pygame.Rect(panel_rect.x + 28, panel_rect.y + 94, panel_rect.width - 56, 76),
             line_gap=4,
             max_lines=3,
         )
@@ -907,9 +978,7 @@ class ChessView:
             state.result_hint,
             self.fonts["small"],
             self.TEXT_MUTED,
-            pygame.Rect(
-                panel_rect.x + 28, panel_rect.bottom - 122, panel_rect.width - 56, 56
-            ),
+            pygame.Rect(panel_rect.x + 28, panel_rect.bottom - 122, panel_rect.width - 56, 56),
             line_gap=3,
             max_lines=3,
         )
@@ -937,21 +1006,90 @@ class ChessView:
 
         for button in self.result_buttons:
             pygame.draw.rect(self.screen, self.PANEL_ALT, button.rect, border_radius=16)
-            pygame.draw.rect(
-                self.screen, button.accent, button.rect, 2, border_radius=16
-            )
+            pygame.draw.rect(self.screen, button.accent, button.rect, 2, border_radius=16)
             label = self.fonts["button"].render(
-                self._fit_single_line(
-                    button.label, self.fonts["button"], button.rect.width - 26
-                ),
+                self._fit_single_line(button.label, self.fonts["button"], button.rect.width - 26),
                 True,
                 self.TEXT_PRIMARY,
             )
             self.screen.blit(label, label.get_rect(center=button.rect.center))
 
-    def _wrap_text(
-        self, text: str, font: pygame.font.Font, max_width: int
-    ) -> list[str]:
+    def _draw_shortcut_overlay(self) -> None:
+        """Draw a keyboard shortcut reference overlay dimming the game board."""
+        size = self.screen.get_size()
+        overlay = pygame.Surface(size, pygame.SRCALPHA)
+        overlay.fill((3, 8, 14, 200))
+        self.screen.blit(overlay, (0, 0))
+
+        panel_rect = pygame.Rect(0, 0, 620, 476)
+        panel_rect.center = (size[0] // 2, size[1] // 2)
+        pygame.draw.rect(self.screen, self.PANEL, panel_rect, border_radius=28)
+        pygame.draw.rect(self.screen, self.ACCENT_SOFT, panel_rect, 2, border_radius=28)
+
+        title = self.fonts["title"].render("Keyboard Shortcuts", True, self.TEXT_PRIMARY)
+        self.screen.blit(title, (panel_rect.x + 28, panel_rect.y + 22))
+
+        shortcuts = [
+            ("R", "New game"),
+            ("U", "Undo last move"),
+            ("F", "Flip board orientation"),
+            ("A", "Toggle AI hints / promotion suggestions"),
+            ("M", "Toggle local 1v1 / vs-AI mode"),
+            ("E", "Cycle AI difficulty (Elo)"),
+            ("C", "Copy current FEN"),
+            ("Ctrl+C", "Copy full move list"),
+            ("S", "Toggle sound effects"),
+            ("P", "Start / pause chess clock"),
+            ("T", "Cycle time control preset"),
+            ("H", "Toggle this shortcut overlay"),
+            ("Esc", "Cancel / close dialog / dismiss promotion"),
+            ("Enter", "Confirm primary dialog action"),
+            ("Shift+click", "Auto-queen promotion"),
+            ("Ctrl+O", "Import PGN from clipboard"),
+            ("Ctrl+P", "Export PGN to clipboard"),
+            ("Right-click", "Clear piece selection"),
+            ("Mouse wheel", "Scroll move history"),
+        ]
+
+        body_x = panel_rect.x + 28
+        body_y = panel_rect.y + 80
+        col_width = (panel_rect.width - 56) // 2
+        line_height = 32
+        mid_col_x = body_x + col_width + 20
+
+        for idx, (key, description) in enumerate(shortcuts):
+            col = idx // 9
+            row = idx % 9
+            x = body_x if col == 0 else mid_col_x
+            y = body_y + row * line_height
+
+            key_bg = pygame.Rect(x, y, 90, 30)
+            pygame.draw.rect(self.screen, self.PANEL_ALT, key_bg, border_radius=10)
+            pygame.draw.rect(self.screen, self.PANEL_BORDER, key_bg, 1, border_radius=10)
+            key_surface = self.fonts["small"].render(key, True, self.HIGHLIGHT)
+            self.screen.blit(
+                key_surface,
+                (key_bg.x + 8, key_bg.y + (key_bg.height - key_surface.get_height()) // 2),
+            )
+
+            desc_surface = self.fonts["small"].render(description, True, self.TEXT_PRIMARY)
+            self.screen.blit(
+                desc_surface,
+                (key_bg.right + 12, key_bg.y + (key_bg.height - desc_surface.get_height()) // 2),
+            )
+
+        hint = self.fonts["small"].render(
+            "Press H or Esc to close this overlay.", True, self.TEXT_MUTED
+        )
+        self.screen.blit(
+            hint,
+            (
+                panel_rect.centerx - hint.get_width() // 2,
+                panel_rect.bottom - 48,
+            ),
+        )
+
+    def _wrap_text(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:
         words = text.split(" ")
         lines: list[str] = []
         current = ""

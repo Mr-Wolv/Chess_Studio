@@ -1,2 +1,23 @@
-# Auto detect text files and perform LF normalization
+# Auto detect text files
 * text=auto
+
+# Normalize all source files to LF in the repository
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.txt text eol=lf
+*.ps1 text eol=lf
+*.bat text eol=lf
+*.cmd text eol=lf
+
+# Binary files should not be modified
+*.png binary
+*.ico binary
+*.exe binary
+*.zip binary
+*.spec binary
