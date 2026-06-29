@@ -34,14 +34,6 @@ class TestMoveRecord:
         record = MoveRecord(chess.BLACK, "e5")
         assert record.side_label == "B"
 
-    def test_legacy_text_white(self) -> None:
-        record = MoveRecord(chess.WHITE, "Nf3")
-        assert record.legacy_text() == "[W] Nf3"
-
-    def test_legacy_text_black(self) -> None:
-        record = MoveRecord(chess.BLACK, "Nc6")
-        assert record.legacy_text() == "[B] Nc6"
-
     def test_immutable(self) -> None:
         record = MoveRecord(chess.WHITE, "e4")
         assert isinstance(record, MoveRecord)  # frozen dataclass
@@ -181,13 +173,6 @@ class TestChessEngineBoard:
         assert move is not None
         assert move.from_square == chess.E2
         assert move.to_square == chess.E4
-
-    def test_get_legacy_move_history(self) -> None:
-        eng = _engine()
-        eng.execute_move(chess.E2, chess.E4)
-        eng.execute_move(chess.E7, chess.E5)
-        legacy = eng.get_legacy_move_history()
-        assert legacy == ["[W] e4", "[B] e5"]
 
     def test_get_fen(self) -> None:
         eng = _engine()

@@ -15,7 +15,7 @@ import chess.pgn  # ensure pgn submodule is loaded at runtime
 
 # ── Named Constants ──────────────────────────────────────────────
 
-DEFAULT_HASH_SIZE_MB = 512
+DEFAULT_HASH_SIZE_MB = 256
 """Default hash table size in megabytes for the UCI engine."""
 
 EVALUATION_TIME_LIMIT = 0.1
@@ -32,9 +32,6 @@ class MoveRecord:
     @property
     def side_label(self) -> str:
         return "W" if self.side == chess.WHITE else "B"
-
-    def legacy_text(self) -> str:
-        return f"[{self.side_label}] {self.san}"
 
 
 def format_move_history(move_history: list[MoveRecord]) -> str:
@@ -55,6 +52,34 @@ class AnalysisResult(TypedDict):
     """Result of a position analysis: evaluation in pawns and an optional best move."""
     evaluation: float
     suggestion: chess.Move | None
+    depth: int
+    nodes: int
+
+
+class PVLine(TypedDict):
+    """A single principal variation line from multi-PV analysis."""
+    rank: int
+    score: float
+    move: chess.Move | None
+    pv: str
+
+
+@dataclass(frozen=True)
+class EvalSnapshot:
+    """A snapshot of engine evaluation at a point in the game.
+
+    Stores the evaluation *before* the move was played, the SAN of the
+    move, and the evaluation *after* the move.  The delta
+    (before → after from the moving side's perspective) indicates
+    move quality.
+    """
+
+    move_number: int
+    side: bool          # side that made the move
+    san: str
+    eval_before: float  # eval before the move (White's perspective)
+    eval_after: float   # eval after the move (White's perspective)
+    delta: float        # improvement for the moving side (positive = good)
 
 
 class ChessEngine:
@@ -143,11 +168,6 @@ class ChessEngine:
         with self._board_lock:
             return list(self.move_history)
 
-    def get_legacy_move_history(self) -> list[str]:
-        """Return move history as a list of legacy-formatted strings."""
-        with self._board_lock:
-            return [record.legacy_text() for record in self.move_history]
-
     def get_captured_piece_keys(self) -> tuple[list[str], list[str]]:
         """Return (white_captured, black_captured) piece key lists."""
         with self._board_lock:
@@ -232,30 +252,93 @@ class ChessEngine:
             return {
                 "evaluation": -999.99 if board.turn == chess.WHITE else 999.99,
                 "suggestion": None,
+                "depth": 0,
+                "nodes": 0,
             }
         if board.is_stalemate() or board.is_insufficient_material():
-            return {"evaluation": 0.0, "suggestion": None}
+            return {"evaluation": 0.0, "suggestion": None, "depth": 0, "nodes": 0}
 
         if not self.is_available():
-            return {"evaluation": 0.0, "suggestion": None}
+            return {"evaluation": 0.0, "suggestion": None, "depth": 0, "nodes": 0}
 
         evaluation = self._evaluate_board_instance(board, time_limit=eval_time) / 100.0
 
         if board.is_game_over() or move_time is None or move_time <= 0:
-            return {"evaluation": evaluation, "suggestion": None}
+            return {"evaluation": evaluation, "suggestion": None, "depth": 0, "nodes": 0}
 
         try:
             with self._engine_lock:
                 assert self.engine is not None
                 result = self.engine.play(board, chess.engine.Limit(time=move_time))
+                # Get depth and nodes from the info dict returned by play()
+                depth = result.info.get("depth", 0) if hasattr(result, "info") else 0
+                nodes = result.info.get("nodes", 0) if hasattr(result, "info") else 0
         except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
             self._mark_engine_unavailable()
-            return {"evaluation": evaluation, "suggestion": None}
+            return {"evaluation": evaluation, "suggestion": None, "depth": 0, "nodes": 0}
 
         return {
             "evaluation": evaluation,
             "suggestion": result.move if result and result.move else None,
+            "depth": depth,
+            "nodes": nodes,
         }
+
+    # ── Multi-PV Analysis ─────────────────────────────────────────
+
+    def analyze_multi_pv(
+        self,
+        fen: str | None = None,
+        num_lines: int = 3,
+        time_limit: float = 0.4,
+    ) -> list[PVLine]:
+        """Analyse a position with MultiPV and return multiple best lines.
+
+        Returns up to *num_lines* lines, each with score, best move,
+        and the first few moves of the principal variation.
+        """
+        board = chess.Board(fen) if fen else self.get_board_copy()
+
+        if board.is_game_over() or not self.is_available():
+            return []
+
+        try:
+            with self._engine_lock:
+                assert self.engine is not None
+                # Use MultiPV: tell the engine to report N best lines
+                self.engine.configure({"MultiPV": num_lines})
+                info = self.engine.analyse(board, chess.engine.Limit(time=time_limit), multipv=num_lines)
+                # Restore MultiPV to 1 for normal operation
+                self.engine.configure({"MultiPV": 1})
+        except (chess.engine.EngineError, chess.engine.EngineTerminatedError, OSError):
+            self._mark_engine_unavailable()
+            return []
+
+        lines: list[PVLine] = []
+        for pv_info in info:
+            score_obj = pv_info.get("score")
+            if score_obj is None:
+                continue
+            score = self._extract_white_score(score_obj)
+            pv_moves = pv_info.get("pv", [])
+            move = pv_moves[0] if pv_moves else None
+            # Format PV as a short string of SANs
+            pv_str = ""
+            if pv_moves:
+                tmp = board.copy()
+                parts: list[str] = []
+                for m in pv_moves[:5]:  # show first 5 moves of PV
+                    try:
+                        parts.append(tmp.san(m))
+                        tmp.push(m)
+                    except Exception:
+                        break
+                pv_str = " ".join(parts)
+
+            rank = pv_info.get("multipv", len(lines) + 1)
+            lines.append(PVLine(rank=rank, score=score, move=move, pv=pv_str))
+
+        return lines
 
     def suggest_promotion_choice(
         self,
@@ -351,16 +434,44 @@ class ChessEngine:
 
     # ── PGN Support ──────────────────────────────────────────────
 
-    def export_pgn(self) -> str:
-        """Export the current game as a PGN string by replaying moves from the start."""
+    def export_pgn(
+        self,
+        white_name: str = "Player 1",
+        black_name: str = "Player 2",
+        annotations: dict[int, str] | None = None,
+    ) -> str:
+        """Export the current game as a PGN string by replaying moves from the start.
+
+        If *annotations* is provided (mapping move_index → annotation symbol),
+        the symbols are embedded as NAGs in the PGN output.
+        """
+        _nag_map = {"!": 1, "?": 2, "!!": 3, "??": 4, "!?": 5, "?!": 6}
         with self._board_lock:
             game = chess.pgn.Game()
             node: Any = game
             replay_board = chess.Board()
-            for record in self.move_history:
+            for i, record in enumerate(self.move_history):
                 move = replay_board.parse_san(record.san)
-                node = node.add_variation(move)
+                child = node.add_variation(move)
+                if annotations and i in annotations:
+                    nag = _nag_map.get(annotations[i])
+                    if nag is not None:
+                        child.set_nag(nag)
+                node = child
                 replay_board.push(move)
+            # Set headers
+            game.headers["White"] = white_name
+            game.headers["Black"] = black_name
+            # Set game result based on final board state
+            outcome = replay_board.outcome(claim_draw=False)
+            if outcome is not None:
+                if outcome.termination == chess.Termination.CHECKMATE:
+                    result = "1-0" if outcome.winner == chess.WHITE else "0-1"
+                else:
+                    result = "1/2-1/2"
+            else:
+                result = "*"  # game in progress or unknown
+            game.headers["Result"] = result
             return str(game)
 
     @staticmethod

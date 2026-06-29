@@ -46,7 +46,14 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHONPYCACHEPREFIX = Join-Path (Get-Location) ".pycache_ci"
-          python -m py_compile main.py ui_comp.py engine.py
+          python -m py_compile main.py ui_comp.py engine.py clock_utils.py pgn_utils.py openings.py openings_data.py openings_stats.py
+
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          $env:SDL_VIDEODRIVER = "dummy"
+          $env:SDL_AUDIODRIVER = "dummy"
+          python -m pytest tests/test_engine.py tests/test_features.py tests/test_integration.py tests/test_openings_stats.py -v -k "Test" 2>&1
 
   build:
     name: Build Windows executable
